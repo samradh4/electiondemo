@@ -1,0 +1,86 @@
+name: Build Constituency Manager APK
+
+on:
+  push:
+    branches:
+      - apk-build-3-6
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct v3.6 source
+        shell: bash
+        run: |
+          cat apk-source-parts/part_* > cm36.b64
+          base64 -d cm36.b64 > cm36.zip
+          rm -rf buildsrc
+          mkdir -p buildsrc
+          unzip -q cm36.zip -d buildsrc
+          test -f buildsrc/Constituency-Manager-3.6/App.tsx
+          test -f buildsrc/Constituency-Manager-3.6/package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: buildsrc/Constituency-Manager-3.6/package-lock.json
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install JavaScript dependencies
+        working-directory: buildsrc/Constituency-Manager-3.6
+        run: npm ci --no-audit --no-fund
+
+      - name: Prepare Android project
+        working-directory: buildsrc/Constituency-Manager-3.6
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const p = 'app.json';
+          const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+          d.expo.version = '3.6.0';
+          d.expo.android = d.expo.android || {};
+          d.expo.android.package = 'com.constituencymanager.app';
+          d.expo.android.versionCode = 36;
+          fs.writeFileSync(p, JSON.stringify(d, null, 2));
+          NODE
+          npx expo prebuild --platform android --clean
+
+      - name: Build standalone release APK
+        working-directory: buildsrc/Constituency-Manager-3.6/android
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          APK=$(find buildsrc/Constituency-Manager-3.6/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)
+          test -n "$APK"
+          cp "$APK" Constituency-Manager-3.6.apk
+          ls -lh Constituency-Manager-3.6.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Constituency-Manager-3.6-APK
+          path: Constituency-Manager-3.6.apk
+          if-no-files-found: error
+          retention-days: 30
